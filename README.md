@@ -42,7 +42,41 @@ As a result:
 
 This plugin is **unsigned**, so Grafana must be told to load it. The plugin id is `openobserve`.
 
-### Option A — install from a release archive (recommended)
+### Option A — preinstall at Grafana startup (most convenient)
+
+Let Grafana download and install the plugin from the release URL on boot — no manual extraction.
+
+**Via environment variables** (works on most Grafana versions; `GF_INSTALL_PLUGINS` accepts `url;plugin-id`):
+
+```bash
+GF_INSTALL_PLUGINS=https://github.com/Windforce17/openobserve-grafana-plugin/releases/download/v1.0.0/openobserve-1.0.0.zip;openobserve
+GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=openobserve
+```
+
+Docker Compose example:
+
+```yaml
+services:
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      GF_INSTALL_PLUGINS: "https://github.com/Windforce17/openobserve-grafana-plugin/releases/download/v1.0.0/openobserve-1.0.0.zip;openobserve"
+      GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: "openobserve"
+```
+
+**Via `grafana.ini` preinstall** (Grafana 11.5+, syntax `id@version@url`):
+
+```ini
+[plugins]
+preinstall = openobserve@1.0.0@https://github.com/Windforce17/openobserve-grafana-plugin/releases/download/v1.0.0/openobserve-1.0.0.zip
+allow_loading_unsigned_plugins = openobserve
+```
+
+Restart Grafana, then add the **OpenObserve** data source. Bump the `v1.0.0` / `1.0.0` in the URL when upgrading to a newer release.
+
+### Option B — install from a release archive
 
 1. Download `openobserve-<version>.zip` from the [Releases](https://github.com/Windforce17/openobserve-grafana-plugin/releases) page.
 2. Extract it into Grafana's plugin directory so the files live in a folder named after the plugin id:
@@ -70,7 +104,7 @@ This plugin is **unsigned**, so Grafana must be told to load it. The plugin id i
 5. Go to **Connections → Data sources → Add new data source → OpenObserve**, set the OpenObserve
    **URL** and **authentication** (see the [Security notice](#️-security-notice) about scoping credentials), then **Save & test**.
 
-### Option B — Docker
+### Option C — Docker with a mounted folder
 
 ```yaml
 services:
@@ -85,7 +119,7 @@ services:
       - ./openobserve:/var/lib/grafana/plugins/openobserve
 ```
 
-### Option C — build from source
+### Option D — build from source
 
 ```bash
 corepack enable          # if you don't have pnpm
