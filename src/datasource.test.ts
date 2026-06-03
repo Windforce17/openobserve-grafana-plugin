@@ -417,6 +417,36 @@ describe('DataSource', () => {
     });
   });
 
+  describe('buildResultFrame (raw query rendering by app context)', () => {
+    const target: any = {
+      refId: 'A',
+      queryType: 'logs',
+      sqlMode: true,
+      query: 'SELECT _timestamp, duration/1000 AS latency_ms FROM "default" ORDER BY _timestamp LIMIT 100',
+    };
+    const hits = [
+      { _timestamp: 1780498534879988, latency_ms: 1.2 },
+      { _timestamp: 1780498534899988, latency_ms: 3.4 },
+    ];
+
+    it('renders a plain (non-aggregation) query as a typed table on a dashboard', () => {
+      const frame = (ds as any).buildResultFrame(hits, target, { app: 'dashboard' });
+      expect(frame.meta.preferredVisualisationType).toBe('table');
+      const ts = frame.fields.find((f: any) => f.name === '_timestamp');
+      const latency = frame.fields.find((f: any) => f.name === 'latency_ms');
+      // Heatmap/table panels need a real time field + numeric field (not a JSON "Content" blob).
+      expect(ts.type).toBe('time');
+      expect(latency.type).toBe('number');
+      expect(latency.values).toEqual([1.2, 3.4]);
+    });
+
+    it('keeps the logs frame (Time + Content) in Explore', () => {
+      const frame = (ds as any).buildResultFrame(hits, target, { app: 'explore' });
+      expect(frame.meta.preferredVisualisationType).toBe('logs');
+      expect(frame.fields.map((f: any) => f.name)).toEqual(['Time', 'Content']);
+    });
+  });
+
   describe('modifyQuery (filter for / out value)', () => {
     it('adds a WHERE clause when the query has none', () => {
       const query: any = { refId: 'A', queryType: 'logs', sqlMode: true, query: 'SELECT * FROM "gke-fluentbit"' };

@@ -510,6 +510,15 @@ export class DataSource
       return getGraphDataFrame(hits, target, options.app, this.histogramTimestampColumn);
     }
 
+    // On a dashboard / panel editor the stream schema (streamFields) isn't loaded, so a logs frame
+    // would only expose Time + a JSON "Content" blob — useless for table/heatmap/stat panels. Render
+    // the raw rows as a table instead, with each selected column typed from the data (timestamps as
+    // time). Explore keeps the logs + histogram experience.
+    const isDashboardContext = options.app === 'dashboard' || options.app === 'panel-editor';
+    if (!isVolume && isDashboardContext) {
+      return getTableDataFrame(hits, target);
+    }
+
     return getLogsDataFrame(hits, target, this.streamFields, this.timestampColumn);
   }
 
