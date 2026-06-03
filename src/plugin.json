@@ -1,0 +1,28 @@
+{
+  "$schema": "https://raw.githubusercontent.com/grafana/grafana/master/docs/sources/developers/plugins/plugin.schema.json",
+  "type": "datasource",
+  "name": "OpenObserve",
+  "id": "openobserve",
+  "info": {
+    "description": "OpenObserve",
+    "author": {
+      "name": "OpenObserve"
+    },
+    "keywords": ["OpenObserve"],
+    "logos": {
+      "small": "img/logo.png",
+      "large": "img/logo.png"
+    },
+    "links": [],
+    "screenshots": [],
+    "version": "%VERSION%",
+    "updated": "%TODAY%"
+  },
+  "dependencies": {
+    "grafanaDependency": ">=12.4.0",
+    "plugins": []
+  },
+  "logs": true,
+  "metrics": true,
+  "tracing": true
+}

@@ -1,0 +1,11 @@
+packages:
+  - .
+
+blockExoticSubdeps: false
+
+allowBuilds:
+  '@swc/core': true
+  core-js: true
+  cypress: false
+  protobufjs: true
+  unrs-resolver: true
