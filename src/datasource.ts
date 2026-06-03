@@ -13,9 +13,10 @@ import { Observable } from 'rxjs';
 import { getBackendSrv, getTemplateSrv } from '@grafana/runtime';
 import { queryLogsVolume } from './features/log/LogsModel';
 
-import { MyQuery, MyDataSourceOptions, CachedQuery } from './types';
+import { MyQuery, MyDataSourceOptions, CachedQuery, OpenObserveStreamType } from './types';
 import { logsErrorMessage, getConsumableTime } from 'utils/zincutils';
 import { getOrganizations } from 'services/organizations';
+import { getFieldValues } from 'services/streams';
 import { cloneDeep } from 'lodash';
 import {
   buildServiceMapFromAggregates,
@@ -98,6 +99,142 @@ export class DataSource
       ...query,
       query: getTemplateSrv().replace(query.query || '', scopedVars),
     };
+  }
+
+  /**
+   * Populates dashboard template variables (type "Query") with distinct values of a field, fetched
+   * from OpenObserve's `_values` API. The plugin has no SQL-backed variable support, so the variable
+   * query is a small `key=value` config string rather than SQL. Supported keys (all optional except
+   * the field):
+   *
+   *   field=service_name           (required; a bare field name on its own is also accepted)
+   *   type=traces|logs|metrics     (stream type; defaults to the trace stream's type, else logs)
+   *   stream=default               (stream name; defaults to the configured default trace/log stream)
+   *   org=default                  (organization; defaults to "default")
+   *   keyword=foo                  (server-side substring filter on the returned values)
+   *   size=500                     (max number of values to return)
+   *
+   * Examples:
+   *   service_name
+   *   field=service_name, type=traces, stream=default
+   *   field=operation_name, type=traces, keyword=$service
+   */
+  async metricFindQuery(query: any, options?: any): Promise<Array<{ text: string; value: string }>> {
+    const raw = (typeof query === 'string' ? query : query?.query ?? '').trim();
+    if (!raw) {
+      return [];
+    }
+
+    // Allow other dashboard variables to be referenced inside the variable query (cascading vars).
+    const interpolated = getTemplateSrv().replace(raw, options?.scopedVars);
+
+    // Parse "key=value" pairs; a bare token with no "=" is treated as the field name.
+    const cfg: Record<string, string> = {};
+    if (interpolated.includes('=')) {
+      interpolated.split(/[;,\n]/).forEach((part) => {
+        const idx = part.indexOf('=');
+        if (idx > -1) {
+          const key = part.slice(0, idx).trim().toLowerCase();
+          const value = part.slice(idx + 1).trim();
+          if (key) {
+            cfg[key] = value;
+          }
+        }
+      });
+    } else {
+      cfg['field'] = interpolated;
+    }
+
+    const field = cfg['field'] || cfg['fields'];
+    if (!field) {
+      return [];
+    }
+
+    const jsonData = this.instanceSettings?.jsonData;
+    const streamType = (cfg['type'] || cfg['streamtype'] || (jsonData?.default_trace_stream ? 'traces' : 'logs')) as OpenObserveStreamType;
+    const stream =
+      cfg['stream'] ||
+      (streamType === 'traces' ? jsonData?.default_trace_stream : jsonData?.default_log_stream) ||
+      jsonData?.default_trace_stream ||
+      jsonData?.default_log_stream ||
+      'default';
+    const orgName = cfg['org'] || cfg['organization'] || 'default';
+    const keyword = cfg['keyword'] || '';
+    const size = Number.isFinite(Number(cfg['size'])) && Number(cfg['size']) > 0 ? Number(cfg['size']) : 500;
+
+    // Resolve the time window from the variable's range (falls back to the last hour).
+    const range = options?.range;
+    let startTime: number;
+    let endTime: number;
+    if (range?.from && range?.to) {
+      const t = getConsumableTime(range);
+      startTime = Math.trunc(t.startTimeInMicro);
+      endTime = Math.trunc(t.endTimeInMirco);
+    } else {
+      endTime = Date.now() * 1000;
+      startTime = endTime - 60 * 60 * 1000 * 1000;
+    }
+
+    try {
+      const response = await getFieldValues({
+        url: this.url,
+        orgName,
+        stream,
+        fields: field,
+        startTime,
+        endTime,
+        keyword,
+        size,
+        noCount: false,
+        streamType,
+      });
+      return this.extractVariableValues(response, field).map((value) => ({ text: value, value }));
+    } catch (error) {
+      console.error('OpenObserve metricFindQuery (_values) failed:', error);
+      return [];
+    }
+  }
+
+  /** Pulls distinct, non-empty string values out of an OpenObserve `_values` response. */
+  private extractVariableValues(response: any, field: string): string[] {
+    const payload = response?.data ?? response;
+    const seen = new Set<string>();
+    const out: string[] = [];
+
+    const push = (raw: any) => {
+      if (raw === null || raw === undefined) {
+        return;
+      }
+      const value = String(raw).trim();
+      if (!value || seen.has(value)) {
+        return;
+      }
+      seen.add(value);
+      out.push(value);
+    };
+
+    const collect = (item: any) => {
+      if (item === null || item === undefined) {
+        return;
+      }
+      if (Array.isArray(item)) {
+        item.forEach(collect);
+        return;
+      }
+      if (typeof item !== 'object') {
+        push(item);
+        return;
+      }
+      // OpenObserve shape: { hits: [ { field, values: [ { zo_sql_key, zo_sql_num } ] } ] }
+      if (Array.isArray(item.values)) {
+        item.values.forEach(collect);
+        return;
+      }
+      push(item.zo_sql_key ?? item.value ?? item.key ?? item[field]);
+    };
+
+    collect(payload?.hits ?? payload);
+    return out;
   }
 
   /**

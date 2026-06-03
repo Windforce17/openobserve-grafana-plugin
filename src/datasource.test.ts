@@ -77,6 +77,14 @@ jest.mock('@grafana/runtime', () => ({
   }),
 }));
 
+jest.mock('services/streams', () => ({
+  getFieldValues: jest.fn(),
+  getStreams: jest.fn(),
+}));
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { getFieldValues } = require('services/streams');
+
 describe('DataSource', () => {
   const instanceSettings: DataSourceInstanceSettings<MyDataSourceOptions> = {
     id: 2,
@@ -407,6 +415,66 @@ describe('DataSource', () => {
       };
       const result = ds.modifyQuery(query, { type: 'ADD_FILTER', options: { key: 'level', value: 'error' } } as any);
       expect(result.query).toBe('SELECT * FROM "gke-fluentbit" WHERE "level" = \'error\' ORDER BY "_timestamp" DESC');
+    });
+  });
+
+  describe('metricFindQuery (template variables via _values)', () => {
+    const valuesResponse = {
+      hits: [
+        {
+          field: 'service_name',
+          values: [
+            { zo_sql_key: 'llm-router', zo_sql_num: 5 },
+            { zo_sql_key: 'api-gateway', zo_sql_num: 3 },
+            { zo_sql_key: '', zo_sql_num: 1 }, // blank should be dropped
+            { zo_sql_key: 'llm-router', zo_sql_num: 2 }, // duplicate should be dropped
+          ],
+        },
+      ],
+    };
+
+    beforeEach(() => {
+      (getFieldValues as jest.Mock).mockReset();
+      (getFieldValues as jest.Mock).mockResolvedValue(valuesResponse);
+    });
+
+    it('returns distinct, non-empty values as {text,value} options', async () => {
+      const result = await ds.metricFindQuery('service_name');
+      expect(result).toEqual([
+        { text: 'llm-router', value: 'llm-router' },
+        { text: 'api-gateway', value: 'api-gateway' },
+      ]);
+    });
+
+    it('treats a bare token as the field name with sane defaults', async () => {
+      await ds.metricFindQuery('service_name');
+      const args = (getFieldValues as jest.Mock).mock.calls[0][0];
+      expect(args.fields).toBe('service_name');
+      expect(args.stream).toBe('default');
+      expect(args.streamType).toBe('logs'); // no default_trace_stream configured
+      expect(args.size).toBe(500);
+    });
+
+    it('parses key=value config (field/type/stream/keyword/size)', async () => {
+      await ds.metricFindQuery('field=operation_name, type=traces, stream=mystream, keyword=foo, size=10');
+      const args = (getFieldValues as jest.Mock).mock.calls[0][0];
+      expect(args.fields).toBe('operation_name');
+      expect(args.streamType).toBe('traces');
+      expect(args.stream).toBe('mystream');
+      expect(args.keyword).toBe('foo');
+      expect(args.size).toBe(10);
+    });
+
+    it('returns [] for an empty query without calling the API', async () => {
+      const result = await ds.metricFindQuery('   ');
+      expect(result).toEqual([]);
+      expect(getFieldValues as jest.Mock).not.toHaveBeenCalled();
+    });
+
+    it('returns [] when the _values request fails', async () => {
+      (getFieldValues as jest.Mock).mockRejectedValueOnce(new Error('boom'));
+      const result = await ds.metricFindQuery('service_name');
+      expect(result).toEqual([]);
     });
   });
 
