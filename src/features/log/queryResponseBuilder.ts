@@ -603,14 +603,37 @@ export const getTracesTableDataFrame = (
  * such as the field "top values" (GROUP BY field, COUNT) so the result renders as a table
  * instead of a logs stream.
  */
+// Column names produced by OpenObserve / our dashboard SQL that should be treated as the time axis.
+const TIME_COLUMN_NAMES = new Set(['time', '_timestamp', 'timestamp', 'zo_sql_key', 'x_axis_1']);
+
+const looksLikeIsoDate = (value: any): boolean =>
+  typeof value === 'string' && /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}/.test(value);
+
 export const getTableDataFrame = (data: any[], target: MyQuery): DataFrame => {
   const fieldNames = data.length ? Object.keys(data[0]) : [];
 
   const fields: Field[] = fieldNames.map((name) => {
-    const sample = data.find((row) => row[name] !== null && row[name] !== undefined);
+    const sample = data.find((row) => row[name] !== null && row[name] !== undefined)?.[name];
+
+    // Detect the time axis by column name (e.g. `histogram(...) AS time`) or an ISO timestamp value.
+    // We deliberately do NOT treat any large integer as time, so a big COUNT/SUM column is not
+    // mistaken for a timestamp. This lets the same table frame drive time series panels too.
+    const isTime = TIME_COLUMN_NAMES.has(name.toLowerCase()) || looksLikeIsoDate(sample);
+    if (isTime) {
+      return {
+        name,
+        type: FieldType.time,
+        config: {},
+        values: data.map((row) => {
+          const value = row[name];
+          return value === null || value === undefined ? null : convertToTimeMs(value);
+        }),
+      };
+    }
+
     return {
       name,
-      type: inferFieldType(sample ? sample[name] : undefined),
+      type: inferFieldType(sample),
       config: {},
       values: data.map((row) => row[name]),
     };

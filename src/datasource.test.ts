@@ -385,6 +385,36 @@ describe('DataSource', () => {
       const target: any = { refId: 'A', queryType: 'traces', sqlMode: true, query: 'SELECT * FROM x GROUP BY y' };
       expect((ds as any).isAggregationLogsQuery(target)).toBe(false);
     });
+
+    it('treats a bare aggregate projection (no GROUP BY) as an aggregation', () => {
+      const target: any = {
+        refId: 'A',
+        queryType: 'logs',
+        sqlMode: true,
+        query: 'SELECT COUNT(*) AS "Total Spans" FROM "default" WHERE service_env IN (\'prod\')',
+      };
+      expect((ds as any).isAggregationLogsQuery(target)).toBe(true);
+    });
+
+    it('treats a percentile projection (no GROUP BY) as an aggregation', () => {
+      const target: any = {
+        refId: 'A',
+        queryType: 'logs',
+        sqlMode: true,
+        query: 'SELECT approx_percentile_cont(duration/1000, 0.95) AS p95 FROM "default"',
+      };
+      expect((ds as any).isAggregationLogsQuery(target)).toBe(true);
+    });
+
+    it('does not classify a plain SELECT that merely filters on a value containing "count("', () => {
+      const target: any = {
+        refId: 'A',
+        queryType: 'logs',
+        sqlMode: true,
+        query: 'SELECT * FROM "default" WHERE log = \'count(\'',
+      };
+      expect((ds as any).isAggregationLogsQuery(target)).toBe(false);
+    });
   });
 
   describe('modifyQuery (filter for / out value)', () => {

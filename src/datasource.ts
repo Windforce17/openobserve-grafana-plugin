@@ -521,12 +521,28 @@ export class DataSource
     return buildGeneratedSql(target, this.timestampColumn, this.instanceSettings?.jsonData);
   }
 
-  /** True when a logs query aggregates (GROUP BY) and should render as a table without a histogram. */
+  /**
+   * True when a logs query aggregates and should render as a table (no logs + histogram view).
+   * This covers two cases:
+   *   1. an explicit GROUP BY (e.g. field "top values"), and
+   *   2. a bare aggregate projection with no GROUP BY (e.g. `SELECT count(*) AS total`), which
+   *      collapses to a single summary row. Such queries must become a table so stat/gauge panels
+   *      receive a typed numeric field instead of an (empty) logs frame.
+   */
   private isAggregationLogsQuery(target: MyQuery): boolean {
     if (target.queryType && target.queryType !== 'logs') {
       return false;
     }
-    return /\bgroup\s+by\b/i.test(this.getEffectiveSql(target));
+    const sql = this.getEffectiveSql(target);
+    if (/\bgroup\s+by\b/i.test(sql)) {
+      return true;
+    }
+    // Only inspect the SELECT projection so an aggregate used in a subquery/WHERE doesn't misclassify
+    // an otherwise row-returning query.
+    const projection = sql.match(/\bselect\b([\s\S]*?)\bfrom\b/i)?.[1] ?? '';
+    return /\b(count|sum|avg|min|max|median|stddev|variance|approx_percentile_cont|approx_percentile|approx_distinct)\s*\(/i.test(
+      projection
+    );
   }
 
   /**

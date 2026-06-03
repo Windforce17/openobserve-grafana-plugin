@@ -1,4 +1,10 @@
-import { buildServiceMapFromAggregates, getTraceDataFrame, getTracesTableDataFrame } from './queryResponseBuilder';
+import {
+  buildServiceMapFromAggregates,
+  getTableDataFrame,
+  getTraceDataFrame,
+  getTracesTableDataFrame,
+} from './queryResponseBuilder';
+import { FieldType } from '@grafana/data';
 import { MyQuery } from '../../types';
 
 const target = { refId: 'A', stream: 'default', organization: 'default' } as unknown as MyQuery;
@@ -50,6 +56,38 @@ describe('getTraceDataFrame', () => {
     expect(operationName.values).toEqual(['GET /api', 'charge']);
     expect(operationName.values).not.toContain('unrelated-name-field');
     expect(serviceName.values).toEqual(['gateway', 'billing']);
+  });
+});
+
+describe('getTableDataFrame', () => {
+  it('types a histogram "time" column as time and converts it to ms (drives timeseries panels)', () => {
+    const rows = [
+      { time: '2026-06-03T15:00:00', service_name: 'gateway', requests: 10 },
+      { time: '2026-06-03T15:01:00', service_name: 'gateway', requests: 12 },
+    ];
+    const frame = getTableDataFrame(rows, target);
+    const timeField = frame.fields.find((f) => f.name === 'time')!;
+    const requests = frame.fields.find((f) => f.name === 'requests')!;
+
+    expect(timeField.type).toBe(FieldType.time);
+    expect(timeField.values[0]).toBe(Date.parse('2026-06-03T15:00:00Z'));
+    expect(requests.type).toBe(FieldType.number);
+  });
+
+  it('does NOT mistake a large numeric (e.g. COUNT) column for a timestamp', () => {
+    const rows = [{ service_name: 'gateway', total: 31154571 }];
+    const frame = getTableDataFrame(rows, target);
+    const total = frame.fields.find((f) => f.name === 'total')!;
+
+    expect(total.type).toBe(FieldType.number);
+    expect(total.values[0]).toBe(31154571);
+  });
+
+  it('exposes a single-stat aggregate result as a numeric field', () => {
+    const frame = getTableDataFrame([{ 'Total Spans': 31154571 }], target);
+    const field = frame.fields.find((f) => f.name === 'Total Spans')!;
+    expect(field.type).toBe(FieldType.number);
+    expect(field.values).toEqual([31154571]);
   });
 });
 
