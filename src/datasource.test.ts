@@ -525,6 +525,24 @@ describe('DataSource', () => {
       expect(args.size).toBe(10);
     });
 
+    it('unions multiple "|"-separated fields into a comma-separated _values request', async () => {
+      (getFieldValues as jest.Mock).mockResolvedValueOnce({
+        hits: [
+          { field: 'service_service_env', values: [{ zo_sql_key: 'prod' }, { zo_sql_key: 'staging' }] },
+          { field: 'service_env', values: [{ zo_sql_key: 'prod' }, { zo_sql_key: 'dev' }] },
+        ],
+      });
+      const result = await ds.metricFindQuery('field=service_service_env|service_env, type=traces');
+      const args = (getFieldValues as jest.Mock).mock.calls[0][0];
+      expect(args.fields).toBe('service_service_env,service_env');
+      // merged + de-duplicated across both fields
+      expect(result).toEqual([
+        { text: 'prod', value: 'prod' },
+        { text: 'staging', value: 'staging' },
+        { text: 'dev', value: 'dev' },
+      ]);
+    });
+
     it('returns [] for an empty query without calling the API', async () => {
       const result = await ds.metricFindQuery('   ');
       expect(result).toEqual([]);

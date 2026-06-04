@@ -149,6 +149,11 @@ export class DataSource
     if (!field) {
       return [];
     }
+    // Several fields can be unioned by separating them with "|" (comma is reserved for the config
+    // pairs). The _values API takes a comma-separated `fields` list and returns values for each;
+    // extractVariableValues then merges + de-dupes them. This makes a variable resilient to schema
+    // differences, e.g. `service_service_env|service_env`.
+    const apiFields = field.split('|').map((f) => f.trim()).filter(Boolean).join(',');
 
     const jsonData = this.instanceSettings?.jsonData;
     const streamType = (cfg['type'] || cfg['streamtype'] || (jsonData?.default_trace_stream ? 'traces' : 'logs')) as OpenObserveStreamType;
@@ -180,7 +185,7 @@ export class DataSource
         url: this.url,
         orgName,
         stream,
-        fields: field,
+        fields: apiFields,
         startTime,
         endTime,
         keyword,
