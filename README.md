@@ -38,22 +38,22 @@ As a result:
   read-only access. Do not use admin/root credentials.
 - Avoid exposing a Grafana instance that uses this data source to untrusted users.
 
-## Installing the plugin in Grafana
+## 🚀 Quickstart
 
-This plugin is **unsigned**, so Grafana must be told to load it. The plugin id is `openobserve`.
+This plugin is **unsigned**, so installing it always means two things:
 
-### Option A — preinstall at Grafana startup (most convenient)
+1. **Install** the plugin (id: `openobserve`).
+2. **Allow** the unsigned plugin (`allow_loading_unsigned_plugins = openobserve`).
 
-Let Grafana download and install the plugin from the release URL on boot — no manual extraction.
+Then restart Grafana and add the data source. The fastest path is the recommended Docker Compose
+snippet below — it does both in one step.
 
-**Via environment variables** (works on most Grafana versions; `GF_INSTALL_PLUGINS` accepts `url;plugin-id`):
+> Replace `v1.0.0` / `1.0.0` in the URLs below with the latest version from the
+> [Releases](https://github.com/Windforce17/openobserve-grafana-plugin/releases) page.
 
-```bash
-GF_INSTALL_PLUGINS=https://github.com/Windforce17/openobserve-grafana-plugin/releases/download/v1.0.0/openobserve-1.0.0.zip;openobserve
-GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=openobserve
-```
+### Step 1 — install the plugin (pick one)
 
-Docker Compose example:
+**🟢 Docker Compose — recommended.** Grafana downloads, installs, and allows the plugin on boot:
 
 ```yaml
 services:
@@ -66,7 +66,14 @@ services:
       GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: "openobserve"
 ```
 
-**Via `grafana.ini` preinstall** (Grafana 11.5+, syntax `id@version@url`):
+**Environment variables (existing Grafana).** Set these on the Grafana process, then restart:
+
+```bash
+GF_INSTALL_PLUGINS=https://github.com/Windforce17/openobserve-grafana-plugin/releases/download/v1.0.0/openobserve-1.0.0.zip;openobserve
+GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=openobserve
+```
+
+**`grafana.ini` preinstall (Grafana 11.5+).** Syntax is `id@version@url`:
 
 ```ini
 [plugins]
@@ -74,63 +81,41 @@ preinstall = openobserve@1.0.0@https://github.com/Windforce17/openobserve-grafan
 allow_loading_unsigned_plugins = openobserve
 ```
 
-Restart Grafana, then add the **OpenObserve** data source. Bump the `v1.0.0` / `1.0.0` in the URL when upgrading to a newer release.
+**Manual (air-gapped or locally built).** Download `openobserve-<version>.zip` from the
+[Releases](https://github.com/Windforce17/openobserve-grafana-plugin/releases) page and extract it
+into Grafana's plugin directory:
 
-### Option B — install from a release archive
+```bash
+# default plugin dir is /var/lib/grafana/plugins
+unzip openobserve-1.0.0.zip -d /var/lib/grafana/plugins
+# result: /var/lib/grafana/plugins/openobserve/plugin.json
+```
 
-1. Download `openobserve-<version>.zip` from the [Releases](https://github.com/Windforce17/openobserve-grafana-plugin/releases) page.
-2. Extract it into Grafana's plugin directory so the files live in a folder named after the plugin id:
-
-   ```bash
-   # default plugin dir is /var/lib/grafana/plugins
-   unzip openobserve-<version>.zip -d /var/lib/grafana/plugins
-   # result: /var/lib/grafana/plugins/openobserve/plugin.json
-   ```
-
-3. Allow the unsigned plugin, either via `grafana.ini`:
-
-   ```ini
-   [plugins]
-   allow_loading_unsigned_plugins = openobserve
-   ```
-
-   or via environment variable:
-
-   ```bash
-   GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=openobserve
-   ```
-
-4. Restart Grafana.
-5. Go to **Connections → Data sources → Add new data source → OpenObserve**, set the OpenObserve
-   **URL** and **authentication** (see the [Security notice](#️-security-notice) about scoping credentials), then **Save & test**.
-
-### Option C — Docker with a mounted folder
+In Docker, mount the extracted folder instead:
 
 ```yaml
-services:
-  grafana:
-    image: grafana/grafana:latest
-    ports:
-      - "3000:3000"
-    environment:
-      GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: openobserve
     volumes:
-      # extracted plugin folder -> /var/lib/grafana/plugins/openobserve
       - ./openobserve:/var/lib/grafana/plugins/openobserve
 ```
 
-### Option D — build from source
+Either way you must also **allow the unsigned plugin** — via `grafana.ini`
+(`allow_loading_unsigned_plugins = openobserve`) or env var
+(`GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=openobserve`).
 
-```bash
-corepack enable          # if you don't have pnpm
-pnpm install
-pnpm build               # outputs to dist/
-# copy dist/ to <grafana-plugins-dir>/openobserve, allow the unsigned plugin, restart Grafana
-```
+**Build from source.** See [Getting started](#getting-started); copy `dist/` to
+`<grafana-plugins-dir>/openobserve`, allow the unsigned plugin, and restart Grafana.
 
-> Verify the plugin loaded under **Administration → Plugins** (search "OpenObserve"). If it doesn't
-> appear, check the Grafana server logs for an unsigned-plugin warning and confirm the folder name
-> is exactly `openobserve`.
+### Step 2 — add the data source
+
+1. **Restart Grafana**, then confirm the plugin loaded under **Administration → Plugins** (search
+   "OpenObserve").
+2. Go to **Connections → Data sources → Add new data source → OpenObserve**.
+3. Set the OpenObserve **URL** and **authentication** (see the [Security notice](#️-security-notice)
+   about scoping credentials).
+4. Click **Save & test**.
+
+> **Plugin not showing up?** Check the Grafana server logs for an unsigned-plugin warning, and make
+> sure the plugin folder is named exactly `openobserve`.
 
 ## What are Grafana data source plugins?
 
@@ -207,46 +192,6 @@ Enable it with `corepack enable` if you don't have it installed.
    ```
 
 
-# Distributing your plugin
-
-When distributing a Grafana plugin either within the community or privately the plugin must be signed so the Grafana application can verify its authenticity. This can be done with the `@grafana/sign-plugin` package.
-
-_Note: It's not necessary to sign a plugin during development. The docker development environment that is scaffolded with `@grafana/create-plugin` caters for running the plugin without a signature._
-
-## Initial steps
-
-Before signing a plugin please read the Grafana [plugin publishing and signing criteria](https://grafana.com/docs/grafana/latest/developers/plugins/publishing-and-signing-criteria/) documentation carefully.
-
-`@grafana/create-plugin` has added the necessary commands and workflows to make signing and distributing a plugin via the grafana plugins catalog as straightforward as possible.
-
-Before signing a plugin for the first time please consult the Grafana [plugin signature levels](https://grafana.com/docs/grafana/latest/developers/plugins/sign-a-plugin/#plugin-signature-levels) documentation to understand the differences between the types of signature level.
-
-1. Create a [Grafana Cloud account](https://grafana.com/signup).
-2. Make sure that the first part of the plugin ID matches the slug of your Grafana Cloud account.
-   - _You can find the plugin ID in the plugin.json file inside your plugin directory. For example, if your account slug is `acmecorp`, you need to prefix the plugin ID with `acmecorp-`._
-3. Create a Grafana Cloud API key with the `PluginPublisher` role.
-4. Keep a record of this API key as it will be required for signing a plugin
-
-## Signing a plugin
-
-### Using Github actions release workflow
-
-If the plugin is using the github actions supplied with `@grafana/create-plugin` signing a plugin is included out of the box. The [release workflow](./.github/workflows/release.yml) can prepare everything to make submitting your plugin to Grafana as easy as possible. Before being able to sign the plugin however a secret needs adding to the Github repository.
-
-1. Please navigate to "settings > secrets > actions" within your repo to create secrets.
-2. Click "New repository secret"
-3. Name the secret "GRAFANA_API_KEY"
-4. Paste your Grafana Cloud API key in the Secret field
-5. Click "Add secret"
-
-#### Push a version tag
-
-To trigger the workflow we need to push a version tag to github. This can be achieved with the following steps:
-
-1. Run `pnpm version <major|minor|patch>`
-2. Run `git push origin main --follow-tags`
-
-
 ## Learn more
 
 Below you can find source code for existing app plugins and other related documentation.
@@ -255,7 +200,6 @@ Below you can find source code for existing app plugins and other related docume
 - [OpenObserve SQL functions reference](https://openobserve.ai/docs/reference/sql-functions/)
 - [Basic data source plugin example](https://github.com/grafana/grafana-plugin-examples/tree/master/examples/datasource-basic#readme)
 - [Plugin.json documentation](https://grafana.com/docs/grafana/latest/developers/plugins/metadata/)
-- [How to sign a plugin?](https://grafana.com/docs/grafana/latest/developers/plugins/sign-a-plugin/)
 
 ## Acknowledgements
 
