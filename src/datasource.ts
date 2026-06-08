@@ -487,21 +487,18 @@ export class DataSource
     const isVolume = Boolean(target?.refId?.includes(REF_ID_STARTER_LOG_VOLUME));
 
     const jsonData = this.instanceSettings?.jsonData;
+    // Context for building internal data links (logs <-> traces) that re-query this datasource.
+    const linkCtx = {
+      datasourceUid: this.instanceSettings?.uid,
+      datasourceName: this.instanceSettings?.name,
+    };
 
     if (target.queryType === 'trace_id') {
-      return getTraceDataFrame(hits, target, jsonData);
+      return getTraceDataFrame(hits, target, jsonData, linkCtx);
     }
 
     if (!isVolume && target.queryType === 'traces') {
-      return getTracesTableDataFrame(
-        hits,
-        target,
-        {
-          datasourceUid: this.instanceSettings?.uid,
-          datasourceName: this.instanceSettings?.name,
-        },
-        jsonData
-      );
+      return getTracesTableDataFrame(hits, target, linkCtx, jsonData);
     }
 
     // An aggregation logs query (e.g. field "top values": GROUP BY ... COUNT) renders as a table.
@@ -524,7 +521,7 @@ export class DataSource
       return getTableDataFrame(hits, target);
     }
 
-    return getLogsDataFrame(hits, target, this.streamFields, this.timestampColumn);
+    return getLogsDataFrame(hits, target, this.streamFields, this.timestampColumn, linkCtx, jsonData);
   }
 
   /** The SQL that will actually run for a target (custom SQL, or generated from the filters). */

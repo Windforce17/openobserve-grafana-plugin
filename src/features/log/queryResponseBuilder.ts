@@ -334,12 +334,110 @@ const getStatusCode = (span: any, fields: TraceFieldNames): number | undefined =
 
 const isErrorStatusCode = (code: number | undefined): boolean => code === 2 || (code !== undefined && code >= 400);
 
+/**
+ * Context needed to build a Grafana internal data link that re-queries THIS datasource.
+ * Both fields come from the datasource instance settings (uid + name).
+ */
+interface DataLinkContext {
+  datasourceUid?: string;
+  datasourceName?: string;
+}
+
+const quoteIdent = (value: string) => `"${value.replace(/"/g, '""')}"`;
+
+// Streams used as link targets. We prefer the configured defaults. For the trace-id drill-down we
+// let the caller pass the current stream as a fallback (trace search already runs against the trace
+// stream); logs default to OpenObserve's conventional "default" stream when nothing is configured.
+const traceStreamFor = (jsonData?: MyDataSourceOptions, fallback?: string) =>
+  jsonData?.default_trace_stream?.trim() || fallback || 'default';
+const logStreamFor = (jsonData?: MyDataSourceOptions) => jsonData?.default_log_stream?.trim() || 'default';
+
+/**
+ * logs / trace-search -> a single trace (queryType `trace_id`). The clicked cell value
+ * (`${__value.raw}`) is the trace id. Mirrors the Tempo-style "open trace" experience.
+ */
+const buildOpenTraceLink = (link: DataLinkContext, target: MyQuery, traceStream: string) => {
+  if (!link.datasourceUid) {
+    return undefined;
+  }
+  return [
+    {
+      title: 'View trace ${__value.raw}',
+      url: '',
+      internal: {
+        datasourceUid: link.datasourceUid,
+        datasourceName: link.datasourceName || '',
+        query: {
+          refId: target.refId,
+          queryType: 'trace_id',
+          streamType: 'traces',
+          displayMode: 'trace',
+          traceId: '${__value.raw}',
+          query: '${__value.raw}',
+          stream: traceStream,
+          organization: target.organization,
+          sqlMode: false,
+        },
+      },
+    },
+  ];
+};
+
+/**
+ * trace / trace-search -> logs filtered to the clicked trace id. Emits a full SQL query against the
+ * configured log stream (`WHERE <trace_id_field> = '<trace id>'`) so the logs view shows every log
+ * line correlated with that trace.
+ */
+const buildTraceToLogsLink = (
+  link: DataLinkContext,
+  target: MyQuery,
+  logStream: string,
+  traceIdField: string
+) => {
+  if (!link.datasourceUid) {
+    return undefined;
+  }
+  // Built by concatenation (not a template literal) so the `${__value.raw}` token survives to Grafana
+  // for interpolation instead of being evaluated as a JS expression here.
+  const sql =
+    'SELECT * FROM ' + quoteIdent(logStream) + ' WHERE ' + quoteIdent(traceIdField) + " = '${__value.raw}'";
+  return [
+    {
+      title: 'View logs for trace ${__value.raw}',
+      url: '',
+      internal: {
+        datasourceUid: link.datasourceUid,
+        datasourceName: link.datasourceName || '',
+        query: {
+          refId: target.refId,
+          queryType: 'logs',
+          streamType: 'logs',
+          displayMode: 'logs',
+          query: sql,
+          stream: logStream,
+          organization: target.organization,
+          sqlMode: true,
+        },
+      },
+    },
+  ];
+};
+
 export const getLogsDataFrame = (
   data: any,
   target: MyQuery,
   streamFields: any = [],
-  timestampColumn = '_timestamp'
+  timestampColumn = '_timestamp',
+  link: DataLinkContext = {},
+  jsonData?: MyDataSourceOptions
 ): DataFrame => {
+  // Only surface a Trace ID column (with a drill-into-trace link) when the logs actually carry one.
+  const traceIdField = resolveTraceFields(jsonData).traceId;
+  const hasTraceId =
+    Array.isArray(data) &&
+    data.some((log: any) => log[traceIdField] !== undefined && log[traceIdField] !== null && log[traceIdField] !== '');
+  const traceLinks = hasTraceId ? buildOpenTraceLink(link, target, traceStreamFor(jsonData)) : undefined;
+
   // Build fields array
   const fields: Field[] = [
     {
@@ -366,6 +464,18 @@ export const getLogsDataFrame = (
     });
   });
 
+  // Append the linkable Trace ID column last so it doesn't disturb the stream-field indexing above.
+  let traceFieldIndex = -1;
+  if (hasTraceId) {
+    traceFieldIndex = fields.length;
+    fields.push({
+      name: 'traceID',
+      type: FieldType.string,
+      config: { displayNameFromDS: 'Trace ID', ...(traceLinks ? { links: traceLinks } : {}) },
+      values: [],
+    });
+  }
+
   // Populate field values
   data.forEach((log: any) => {
     fields[0].values.push(convertToTimeMs(log[timestampColumn])); // Time
@@ -375,6 +485,11 @@ export const getLogsDataFrame = (
     streamFields.forEach((field: any, index: number) => {
       fields[index + 2].values.push(log[field.name]);
     });
+
+    if (traceFieldIndex >= 0) {
+      const raw = log[traceIdField];
+      fields[traceFieldIndex].values.push(raw === undefined || raw === null ? '' : String(raw));
+    }
   });
 
   return {
@@ -387,10 +502,22 @@ export const getLogsDataFrame = (
   };
 };
 
-export const getTraceDataFrame = (data: any[], target: MyQuery, jsonData?: MyDataSourceOptions): DataFrame => {
+export const getTraceDataFrame = (
+  data: any[],
+  target: MyQuery,
+  jsonData?: MyDataSourceOptions,
+  link: DataLinkContext = {}
+): DataFrame => {
   const traceFields = resolveTraceFields(jsonData);
+  // Let users jump from the rendered trace straight to its correlated logs.
+  const toLogsLinks = buildTraceToLogsLink(link, target, logStreamFor(jsonData), traceFields.traceId);
   const fields: Field[] = [
-    { name: 'traceID', type: FieldType.string, config: {}, values: [] },
+    {
+      name: 'traceID',
+      type: FieldType.string,
+      config: { ...(toLogsLinks ? { links: toLogsLinks } : {}) },
+      values: [],
+    },
     { name: 'spanID', type: FieldType.string, config: {}, values: [] },
     { name: 'parentSpanID', type: FieldType.string, config: {}, values: [] },
     { name: 'operationName', type: FieldType.string, config: {}, values: [] },
@@ -531,35 +658,17 @@ export const getTracesTableDataFrame = (
   // Most recent traces first.
   rows.sort((a, b) => b.startTime - a.startTime);
 
-  const traceIdLinks = link.datasourceUid
-    ? [
-        {
-          title: 'View trace ${__value.raw}',
-          url: '',
-          internal: {
-            datasourceUid: link.datasourceUid,
-            datasourceName: link.datasourceName || '',
-            query: {
-              refId: target.refId,
-              queryType: 'trace_id',
-              streamType: 'traces',
-              displayMode: 'trace',
-              traceId: '${__value.raw}',
-              query: '${__value.raw}',
-              stream: target.stream,
-              organization: target.organization,
-              sqlMode: false,
-            },
-          },
-        },
-      ]
-    : undefined;
+  // The trace ID column carries both "open trace" and "view correlated logs" links.
+  const traceIdLinks = [
+    ...(buildOpenTraceLink(link, target, traceStreamFor(jsonData, target.stream)) || []),
+    ...(buildTraceToLogsLink(link, target, logStreamFor(jsonData), traceFields.traceId) || []),
+  ];
 
   const fields: Field[] = [
     {
       name: 'traceID',
       type: FieldType.string,
-      config: { displayNameFromDS: 'Trace ID', ...(traceIdLinks ? { links: traceIdLinks } : {}) },
+      config: { displayNameFromDS: 'Trace ID', ...(traceIdLinks.length ? { links: traceIdLinks } : {}) },
       values: rows.map((row) => row.traceID),
     },
     {

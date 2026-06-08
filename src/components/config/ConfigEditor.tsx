@@ -89,7 +89,9 @@ export function ConfigEditor(props: Props) {
       <ConfigSection title="OpenObserve query defaults">
         <p className={helperText}>
           Configure separate defaults for log and trace workflows. These defaults are used by the query editor when a new
-          query is created, and the trace field mappings drive trace search and the drill-down into a single trace.
+          query is created, and the trace field mappings drive trace search and the drill-down into a single trace. The
+          default log/trace streams and the Trace ID field also power the log&nbsp;&harr;&nbsp;trace links: logs jump to a
+          trace using the default trace stream, and a trace jumps to its correlated logs using the default log stream.
         </p>
         <div className={settingsGrid}>
           {renderSetting('timestamp_column', 'Time field name', '_timestamp', true)}
