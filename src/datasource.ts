@@ -501,6 +501,12 @@ export class DataSource
       return getTracesTableDataFrame(hits, target, linkCtx, jsonData);
     }
 
+    // EXPLAIN / DESCRIBE / SHOW return plan or metadata rows (no _timestamp), so render them as a
+    // table. As a logs stream they'd show an empty Time column plus a JSON "Content" blob.
+    if (!isVolume && /^\s*(explain|describe|desc|show)\b/i.test(this.getEffectiveSql(target))) {
+      return getTableDataFrame(hits, target);
+    }
+
     // An aggregation logs query (e.g. field "top values": GROUP BY ... COUNT) renders as a table.
     // This is derived from the SQL rather than a sticky flag, so switching back to a plain logs
     // query reliably restores the logs + histogram view.

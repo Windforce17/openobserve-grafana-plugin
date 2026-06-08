@@ -15,7 +15,11 @@ const escapeSqlString = (value: string) => value.replace(/'/g, "''");
 
 const quoteIdentifier = (value: string) => `"${value.replace(/"/g, '""')}"`;
 
-const isFullSql = (value: string) => /^\s*(select|with)\b/i.test(value);
+// User-written SQL we should pass through verbatim. Besides the usual SELECT/WITH (CTE) queries,
+// this also recognizes the read-only inspection statements OpenObserve/DataFusion accept
+// (EXPLAIN [ANALYZE], DESCRIBE/DESC, SHOW) so e.g. `EXPLAIN ANALYZE SELECT ...` isn't discarded
+// and rebuilt as `SELECT * FROM <stream>`.
+const isFullSql = (value: string) => /^\s*(select|with|explain|describe|desc|show)\b/i.test(value);
 
 const isBlank = (value?: string) => !value || !value.trim();
 
