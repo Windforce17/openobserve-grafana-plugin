@@ -23,7 +23,7 @@ type JsonSettingKey = keyof Pick<
 
 const OPENOBSERVE_DEFAULTS: Record<JsonSettingKey, string> = {
   timestamp_column: '_timestamp',
-  default_organization: 'default',
+  default_organization: '',
   default_log_stream: '',
   default_trace_stream: '',
   trace_id_field: 'trace_id',

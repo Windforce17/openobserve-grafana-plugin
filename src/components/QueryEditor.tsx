@@ -496,11 +496,23 @@ export const QueryEditor = ({ query, onChange, onRunQuery, datasource, app, rang
         const organizations = normalizeOrganizations(orgs);
         setOrgOptions(organizations);
 
-        // Prefer the org already on the query (saved dashboards), then the configured default
-        // organization, then the first org the API returns, then the literal "default".
+        // Resolve the org to select for a new query. OpenObserve uses the org *identifier* in API
+        // URLs, but a user may configure the default by its display name, so we match against the
+        // fetched list by identifier OR name. Precedence:
+        //   1. org already on the query (saved dashboards)
+        //   2. configured default org, resolved against the list (name -> identifier)
+        //   3. configured default org as a literal (in case it isn't listed, e.g. permissions)
+        //   4. an org whose identifier or name is "default"
+        //   5. the first org the API returns
+        //   6. the literal "default"
+        const configuredOrg = jsonData.default_organization?.trim();
+        const matchOrg = (needle?: string) =>
+          needle ? organizations.find((o) => o.value === needle || o.label === needle)?.value : undefined;
         const selectedOrg =
           query.organization ||
-          jsonData.default_organization?.trim() ||
+          matchOrg(configuredOrg) ||
+          configuredOrg ||
+          matchOrg('default') ||
           organizations[0]?.value ||
           'default';
         const initialQueryType = getQueryType(query);
