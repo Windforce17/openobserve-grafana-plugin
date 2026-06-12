@@ -58,6 +58,7 @@ export interface MyDataSourceOptions extends DataSourceJsonData {
   path?: string;
   url: string;
   timestamp_column: string;
+  default_organization?: string;
   default_log_stream?: string;
   default_trace_stream?: string;
   trace_id_field?: string;

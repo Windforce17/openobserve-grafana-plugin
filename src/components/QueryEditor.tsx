@@ -496,10 +496,13 @@ export const QueryEditor = ({ query, onChange, onRunQuery, datasource, app, rang
         const organizations = normalizeOrganizations(orgs);
         setOrgOptions(organizations);
 
+        // Prefer the org already on the query (saved dashboards), then the configured default
+        // organization, then the first org the API returns, then the literal "default".
         const selectedOrg =
-          (isInDashboard && query.organization ? query.organization : organizations[0]?.value) ||
           query.organization ||
-          '';
+          jsonData.default_organization?.trim() ||
+          organizations[0]?.value ||
+          'default';
         const initialQueryType = getQueryType(query);
         const selectedStreamType =
           initialQueryType === 'logs' ? query.streamType || 'logs' : 'traces';

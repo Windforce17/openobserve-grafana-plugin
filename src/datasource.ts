@@ -163,7 +163,7 @@ export class DataSource
       jsonData?.default_trace_stream ||
       jsonData?.default_log_stream ||
       'default';
-    const orgName = cfg['org'] || cfg['organization'] || 'default';
+    const orgName = cfg['org'] || cfg['organization'] || jsonData?.default_organization?.trim() || 'default';
     const keyword = cfg['keyword'] || '';
     const size = Number.isFinite(Number(cfg['size'])) && Number(cfg['size']) > 0 ? Number(cfg['size']) : 500;
 
@@ -363,6 +363,15 @@ export class DataSource
     return `SELECT histogram(${quoted}) AS zo_sql_key, count(*) AS zo_sql_num${fromClause} GROUP BY zo_sql_key ORDER BY zo_sql_key`;
   }
 
+  /** Organization for API calls: the query's org, else the configured default, else "default". */
+  private resolveOrg(target: MyQuery): string {
+    return (
+      (target.organization || '').trim() ||
+      (this.instanceSettings?.jsonData?.default_organization || '').trim() ||
+      'default'
+    );
+  }
+
   doRequest(target: MyQuery, data: any) {
     const searchType = 'ui';
     const useCache = true;
@@ -370,7 +379,7 @@ export class DataSource
     const requestBody = this.ensureSearchRequestBody(target, data, { addSize: true });
 
     const url =
-      this.url + `/api/${target.organization}/_search?type=${pageType}&search_type=${searchType}&use_cache=${useCache}`;
+      this.url + `/api/${this.resolveOrg(target)}/_search?type=${pageType}&search_type=${searchType}&use_cache=${useCache}`;
 
     return getBackendSrv().post(url, requestBody, {
       showErrorAlert: false,
@@ -384,7 +393,7 @@ export class DataSource
     const requestBody = this.buildHistogramRequest(target, data);
 
     const url =
-      this.url + `/api/${target.organization}/_search?type=${pageType}&search_type=${searchType}&use_cache=${useCache}`;
+      this.url + `/api/${this.resolveOrg(target)}/_search?type=${pageType}&search_type=${searchType}&use_cache=${useCache}`;
 
     return getBackendSrv().post(url, requestBody, {
       showErrorAlert: false,

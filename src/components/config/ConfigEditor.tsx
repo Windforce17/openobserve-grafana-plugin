@@ -10,6 +10,7 @@ interface Props extends DataSourcePluginOptionsEditorProps<MyDataSourceOptions> 
 type JsonSettingKey = keyof Pick<
   MyDataSourceOptions,
   | 'timestamp_column'
+  | 'default_organization'
   | 'default_log_stream'
   | 'default_trace_stream'
   | 'trace_id_field'
@@ -22,6 +23,7 @@ type JsonSettingKey = keyof Pick<
 
 const OPENOBSERVE_DEFAULTS: Record<JsonSettingKey, string> = {
   timestamp_column: '_timestamp',
+  default_organization: 'default',
   default_log_stream: '',
   default_trace_stream: '',
   trace_id_field: 'trace_id',
@@ -95,6 +97,7 @@ export function ConfigEditor(props: Props) {
         </p>
         <div className={settingsGrid}>
           {renderSetting('timestamp_column', 'Time field name', '_timestamp', true)}
+          {renderSetting('default_organization', 'Default organization', 'default')}
           {renderSetting('default_log_stream', 'Default log stream', 'default')}
           {renderSetting('default_trace_stream', 'Default trace stream', 'default')}
           {renderSetting('trace_id_field', 'Trace ID field', 'trace_id', true)}
