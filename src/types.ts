@@ -37,6 +37,13 @@ export interface MyQuery extends DataQuery {
   tagOperator?: OpenObserveFilterOperator;
   tagValue?: string;
   advancedTraceSql?: string;
+  /**
+   * Per-target "compare to previous period" offset (e.g. "1d", "7d", or a bare microsecond count).
+   * When set, this target's start_time/end_time are shifted back by the offset (so the query stays
+   * partition-pruned) and the returned timestamps are shifted forward by the same amount, so the
+   * previous-period series aligns on the current time axis for overlay/comparison panels.
+   */
+  compareOffset?: string;
 }
 
 export const DEFAULT_QUERY: Partial<MyQuery> = {

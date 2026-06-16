@@ -8,13 +8,14 @@ import {
   SupplementaryQueryType,
   SupplementaryQueryOptions,
   LogLevel,
+  FieldType,
 } from '@grafana/data';
 import { Observable } from 'rxjs';
 import { getBackendSrv, getTemplateSrv } from '@grafana/runtime';
 import { queryLogsVolume } from './features/log/LogsModel';
 
 import { MyQuery, MyDataSourceOptions, CachedQuery, OpenObserveStreamType } from './types';
-import { logsErrorMessage, getConsumableTime } from 'utils/zincutils';
+import { logsErrorMessage, getConsumableTime, parseCompareOffsetMicros } from 'utils/zincutils';
 import { getOrganizations } from 'services/organizations';
 import { getFieldValues } from 'services/streams';
 import { cloneDeep } from 'lodash';
@@ -37,6 +38,10 @@ const REF_ID_STARTER_LOG_VOLUME = 'log-volume-';
 
 // OpenObserve query timeout in seconds (3 minutes).
 const QUERY_TIMEOUT_SECONDS = 180;
+
+// Upper bound on per-datasource cache slots (one per distinct query). Oldest entries are evicted
+// first so a long-lived dashboard with many panels/time ranges does not grow memory unbounded.
+const MAX_CACHE_ENTRIES = 64;
 
 const quoteSqlIdentifier = (value: string) => `"${value.replace(/"/g, '""')}"`;
 const escapeSqlString = (value: string) => value.replace(/'/g, "''");
@@ -68,8 +73,11 @@ export class DataSource
   instanceSettings?: DataSourceInstanceSettings<MyDataSourceOptions>;
   url: string;
   streamFields: any[];
-  cachedLogsQuery: CachedQuery;
-  cachedHistogramQuery: CachedQuery;
+  // Keyed per (request body + display mode + refId) so that several targets in the same panel
+  // (e.g. a now + previous-period overlay) each get their own cache slot instead of clobbering a
+  // single shared one. Bounded by MAX_CACHE_ENTRIES to keep memory in check.
+  cachedLogsQueries: Map<string, CachedQuery>;
+  cachedHistogramQueries: Map<string, CachedQuery>;
   timestampColumn: string;
   histogramTimestampColumn: string;
 
@@ -78,18 +86,8 @@ export class DataSource
     this.url = instanceSettings.url || '';
     this.instanceSettings = instanceSettings;
     this.streamFields = [];
-    this.cachedLogsQuery = {
-      requestQuery: '',
-      isFetching: false,
-      data: null,
-      promise: null,
-    };
-    this.cachedHistogramQuery = {
-      requestQuery: '',
-      isFetching: false,
-      data: null,
-      promise: null,
-    };
+    this.cachedLogsQueries = new Map();
+    this.cachedHistogramQueries = new Map();
     this.timestampColumn = instanceSettings.jsonData.timestamp_column;
     this.histogramTimestampColumn = "zo_sql_key"; // In histogram query response, we get zo_sql_key as timestamp column by default. Changing this will break things.
   }
@@ -269,7 +267,19 @@ export class DataSource
    */
   private processSingleQuery(target: MyQuery, timestamps: any, options: DataQueryRequest<MyQuery>): Promise<any> {
     const isHistogramQuery = Boolean(target?.refId?.includes(REF_ID_STARTER_LOG_VOLUME));
-    const reqData = buildQuery(target, timestamps, this.streamFields, options.app, this.timestampColumn, this.instanceSettings?.jsonData);
+
+    // "Compare to previous period": shift this target's window back by the offset so the API call is
+    // still partition-pruned by start_time/end_time (fast). The returned timestamps are shifted
+    // forward again in createDataFrame so the previous-period series lands on the current axis.
+    const offsetMicros = parseCompareOffsetMicros(target.compareOffset);
+    const effectiveTimestamps = offsetMicros
+      ? {
+          startTimeInMicro: timestamps.startTimeInMicro - offsetMicros,
+          endTimeInMirco: timestamps.endTimeInMirco - offsetMicros,
+        }
+      : timestamps;
+
+    const reqData = buildQuery(target, effectiveTimestamps, this.streamFields, options.app, this.timestampColumn, this.instanceSettings?.jsonData);
 
     // Handle cache management
     const { currentCache, shouldUseCachedData } = this.handleCacheManagement(target, reqData, options, isHistogramQuery);
@@ -285,7 +295,7 @@ export class DataSource
 
     // The service map is built from server-side aggregations (nodes + edges), not raw spans.
     if (target.queryType === 'service_graph') {
-      return this.processServiceMapQuery(target, timestamps, options, currentCache);
+      return this.processServiceMapQuery(target, effectiveTimestamps, options, currentCache);
     }
 
     // Process regular logs queries
@@ -401,21 +411,11 @@ export class DataSource
   }
 
   resetHistogramQueryCache() {
-    this.cachedHistogramQuery = {
-      requestQuery: '',
-      isFetching: false,
-      data: null,
-      promise: null,
-    };
+    this.cachedHistogramQueries.clear();
   }
 
   resetLogsQueryCache() {
-    this.cachedLogsQuery = {
-      requestQuery: '',
-      isFetching: false,
-      data: null,
-      promise: null,
-    };
+    this.cachedLogsQueries.clear();
   }
 
   /**
@@ -423,7 +423,7 @@ export class DataSource
    * Returns the cached data if available, otherwise sets up a new cache entry
    */
   private handleCacheManagement(target: MyQuery, reqData: any, options: DataQueryRequest<MyQuery>, isHistogramQuery: boolean): { currentCache: CachedQuery, shouldUseCachedData: boolean } {
-    let currentCache = isHistogramQuery ? this.cachedHistogramQuery : this.cachedLogsQuery;
+    const store = isHistogramQuery ? this.cachedHistogramQueries : this.cachedLogsQueries;
 
     const cacheKey = JSON.stringify({
       reqData,
@@ -431,26 +431,31 @@ export class DataSource
       type: target.refId,
     });
 
-    // Check if we have cached data for this query
-    if (cacheKey === currentCache.requestQuery && currentCache.data) {
-      return { currentCache, shouldUseCachedData: true };
+    // Hit: an in-flight or completed promise already exists for this exact query.
+    const existing = store.get(cacheKey);
+    if (existing && existing.data) {
+      return { currentCache: existing, shouldUseCachedData: true };
     }
 
-    // Reset appropriate cache and set up new promise
-    if (target?.refId?.includes(REF_ID_STARTER_LOG_VOLUME)) {
-      this.resetHistogramQueryCache();
-    } else {
-      this.resetLogsQueryCache();
+    // Miss: bound memory by evicting the oldest slots, then create a fresh one for this query.
+    while (store.size >= MAX_CACHE_ENTRIES) {
+      const oldestKey = store.keys().next().value;
+      if (oldestKey === undefined) {
+        break;
+      }
+      store.delete(oldestKey);
     }
 
-    currentCache = isHistogramQuery ? this.cachedHistogramQuery : this.cachedLogsQuery;
-
+    const currentCache: CachedQuery = {
+      requestQuery: cacheKey,
+      isFetching: true,
+      data: null,
+      promise: null,
+    };
     currentCache.data = new Promise((resolve, reject) => {
       currentCache.promise = { resolve, reject };
     });
-
-    currentCache.requestQuery = cacheKey;
-    currentCache.isFetching = true;
+    store.set(cacheKey, currentCache);
 
     return { currentCache, shouldUseCachedData: false };
   }
@@ -479,9 +484,36 @@ export class DataSource
    * Returns either graph or logs data frame with proper caching
    */
   private createDataFrame(hits: any[], target: MyQuery, options: DataQueryRequest<MyQuery>, currentCache: CachedQuery): any {
-    const dataFrame = this.buildResultFrame(hits, target, options);
+    let dataFrame = this.buildResultFrame(hits, target, options);
+
+    // For a "compare to previous period" target, the data was fetched from the shifted-back window.
+    // Move its time axis forward by the same offset so it overlays the current period. Time fields
+    // are already in milliseconds at this point, so the offset is converted from micros to millis.
+    const offsetMicros = parseCompareOffsetMicros(target.compareOffset);
+    if (offsetMicros) {
+      dataFrame = this.shiftFrameTime(dataFrame, offsetMicros / 1000);
+    }
+
     currentCache.promise?.resolve(dataFrame);
     return dataFrame;
+  }
+
+  /**
+   * Shifts every time-typed field in a frame (or array of frames) forward by offsetMs. Used to align
+   * a previous-period comparison series onto the current time axis. Non-time fields are untouched.
+   */
+  private shiftFrameTime(frame: any, offsetMs: number): any {
+    const frames = Array.isArray(frame) ? frame : [frame];
+    for (const f of frames) {
+      for (const field of f?.fields || []) {
+        if (field?.type === FieldType.time && Array.isArray(field.values)) {
+          field.values = field.values.map((value: any) =>
+            value === null || value === undefined ? value : value + offsetMs
+          );
+        }
+      }
+    }
+    return frame;
   }
 
   /**
