@@ -1,6 +1,7 @@
 import {
   buildServiceMapFromAggregates,
   getTableDataFrame,
+  getTimeSeriesByLabelFrames,
   getTraceDataFrame,
   getTracesTableDataFrame,
 } from './queryResponseBuilder';
@@ -121,5 +122,59 @@ describe('buildServiceMapFromAggregates', () => {
     expect(nodes.fields.find((f) => f.name === 'id')!.values).toEqual(expect.arrayContaining(['a', 'b']));
     // self-edge c -> c is dropped
     expect(edges.length).toBe(1);
+  });
+});
+
+describe('getTimeSeriesByLabelFrames', () => {
+  const tsTarget = { refId: 'A', stream: 'default', organization: 'default' } as unknown as MyQuery;
+
+  // Two services x two time buckets, long format like `histogram(_timestamp) AS time, service_name, tpm_now`.
+  const rows = [
+    { time: '2026-06-16T00:00:00', service_name: 'checkout', tpm_now: 10 },
+    { time: '2026-06-16T00:01:00', service_name: 'checkout', tpm_now: 12 },
+    { time: '2026-06-16T00:00:00', service_name: 'cart', tpm_now: 3 },
+    { time: '2026-06-16T00:01:00', service_name: 'cart', tpm_now: 5 },
+  ];
+
+  it('produces one labeled series frame per group, time-sorted', () => {
+    const frames = getTimeSeriesByLabelFrames(rows, tsTarget);
+    expect(frames.length).toBe(2);
+
+    const checkout = frames.find((f) => f.name === 'checkout')!;
+    expect(checkout).toBeDefined();
+
+    const timeField = checkout.fields.find((f) => f.name === 'Time')!;
+    expect(timeField.type).toBe(FieldType.time);
+    expect(timeField.values.length).toBe(2);
+    expect(typeof timeField.values[0]).toBe('number');
+
+    const valueField = checkout.fields.find((f) => f.name === 'tpm_now')!;
+    expect(valueField.type).toBe(FieldType.number);
+    expect(valueField.values).toEqual([10, 12]);
+    // service_name carried as a label so "Time series to table" surfaces it as a column.
+    expect(valueField.labels).toEqual({ service_name: 'checkout' });
+  });
+
+  it('keeps each group isolated', () => {
+    const frames = getTimeSeriesByLabelFrames(rows, tsTarget);
+    const cart = frames.find((f) => f.name === 'cart')!;
+    expect(cart.fields.find((f) => f.name === 'tpm_now')!.values).toEqual([3, 5]);
+    expect(cart.fields.find((f) => f.name === 'tpm_now')!.labels).toEqual({ service_name: 'cart' });
+  });
+
+  it('collapses to a single frame when there is no dimension column', () => {
+    const dimless = [
+      { time: '2026-06-16T00:00:00', p95: 100 },
+      { time: '2026-06-16T00:01:00', p95: 120 },
+    ];
+    const frames = getTimeSeriesByLabelFrames(dimless, tsTarget);
+    expect(frames.length).toBe(1);
+    expect(frames[0].fields.find((f) => f.name === 'p95')!.values).toEqual([100, 120]);
+  });
+
+  it('returns a single empty frame for no data', () => {
+    const frames = getTimeSeriesByLabelFrames([], tsTarget);
+    expect(frames.length).toBe(1);
+    expect(frames[0].length).toBe(0);
   });
 });

@@ -24,6 +24,7 @@ import {
   getGraphDataFrame,
   getLogsDataFrame,
   getTableDataFrame,
+  getTimeSeriesByLabelFrames,
   getTraceDataFrame,
   getTracesTableDataFrame,
 } from 'features/log/queryResponseBuilder';
@@ -540,6 +541,13 @@ export class DataSource
 
     if (!isVolume && target.queryType === 'traces') {
       return getTracesTableDataFrame(hits, target, linkCtx, jsonData);
+    }
+
+    // Opt-in: a time-bucketed group-by rendered as labeled multi-series frames (one series per
+    // group), so "Time series to table" can build a per-group sparkline table. Checked before the
+    // aggregation->table branch below, which these queries would otherwise hit.
+    if (!isVolume && target.format === 'timeseries') {
+      return getTimeSeriesByLabelFrames(hits, target, this.timestampColumn);
     }
 
     // EXPLAIN / DESCRIBE / SHOW return plan or metadata rows (no _timestamp), so render them as a

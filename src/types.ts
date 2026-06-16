@@ -44,6 +44,13 @@ export interface MyQuery extends DataQuery {
    * previous-period series aligns on the current time axis for overlay/comparison panels.
    */
   compareOffset?: string;
+  /**
+   * Result shape for dashboard panels. Defaults to a single table frame. Set to "timeseries" for a
+   * time-bucketed group-by query (e.g. `histogram(_timestamp) AS time, service_name, COUNT(*)`) to
+   * get labeled multi-series frames (one series per group) instead — required for sparkline tables
+   * built with the "Time series to table" transformation.
+   */
+  format?: 'table' | 'timeseries';
 }
 
 export const DEFAULT_QUERY: Partial<MyQuery> = {

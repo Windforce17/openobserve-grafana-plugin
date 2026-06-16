@@ -930,6 +930,110 @@ export const getGraphDataFrame = (
   };
 };
 
+/**
+ * Builds labeled, multi-series time-series frames from a time-bucketed group-by result (one row per
+ * time bucket per group, e.g. `histogram(_timestamp) AS time, service_name, COUNT(*) AS tpm`).
+ *
+ * Each distinct combination of the non-time, non-numeric "dimension" columns becomes its OWN frame,
+ * and those dimension values are attached as field labels. This is the shape Grafana's "Time series
+ * to table" transformation expects: it renders each series as a Trend (sparkline) row and turns the
+ * labels (e.g. service_name) into joinable table columns — which a single wide table frame cannot do
+ * (partitionByValues only splits a single frame and breaks across multiple query frames).
+ *
+ * With no dimension columns this collapses to a single frame with one numeric field per value column
+ * (a plain multi-series time series), so it is also safe for dimensionless time-series queries.
+ */
+export const getTimeSeriesByLabelFrames = (
+  data: any[],
+  target: MyQuery,
+  timestampColumn = '_timestamp'
+): DataFrame[] => {
+  const emptyFrame = (): DataFrame => ({
+    refId: target.refId,
+    meta: { preferredVisualisationType: 'graph' },
+    fields: [],
+    length: 0,
+  });
+
+  if (!data || data.length === 0) {
+    return [emptyFrame()];
+  }
+
+  const fieldNames = getFieldsFromData(data);
+  const timeField =
+    fieldNames.find((name) => TIME_COLUMN_NAMES.has(name.toLowerCase())) ||
+    detectTimestampField(data) ||
+    timestampColumn;
+
+  // Split the remaining columns into numeric value fields and string dimension (label) fields.
+  const valueFields: string[] = [];
+  const dimensionFields: string[] = [];
+  for (const name of fieldNames) {
+    if (name === timeField) {
+      continue;
+    }
+    const sample = data.find((row) => row[name] !== null && row[name] !== undefined)?.[name];
+    if (inferFieldType(sample) === FieldType.number) {
+      valueFields.push(name);
+    } else {
+      dimensionFields.push(name);
+    }
+  }
+
+  if (!valueFields.length) {
+    return [emptyFrame()];
+  }
+
+  // Group rows by the dimension tuple (one group per service, per pod, ...). Rows arrive ordered by
+  // the query's ORDER BY time, and grouping preserves that order, so each series stays time-sorted.
+  const groups = new Map<string, any[]>();
+  for (const row of data) {
+    const key = dimensionFields.map((f) => String(row[f] ?? '')).join(' ');
+    let bucket = groups.get(key);
+    if (!bucket) {
+      bucket = [];
+      groups.set(key, bucket);
+    }
+    bucket.push(row);
+  }
+
+  const frames: DataFrame[] = [];
+  for (const rows of groups.values()) {
+    const labels: Record<string, string> = {};
+    for (const f of dimensionFields) {
+      labels[f] = String(rows[0][f] ?? '');
+    }
+
+    const timeValues = rows.map((row) => {
+      const value = row[timeField];
+      return value === null || value === undefined ? null : convertToTimeMs(value);
+    });
+
+    const fields: Field[] = [
+      { name: 'Time', type: FieldType.time, config: {}, values: timeValues },
+    ];
+    for (const vf of valueFields) {
+      fields.push({
+        name: vf,
+        type: FieldType.number,
+        config: {},
+        labels,
+        values: rows.map((row) => row[vf]),
+      });
+    }
+
+    frames.push({
+      name: dimensionFields.map((f) => labels[f]).join(' ') || undefined,
+      refId: target.refId,
+      meta: { preferredVisualisationType: 'graph' },
+      fields,
+      length: rows.length,
+    });
+  }
+
+  return frames;
+};
+
 const getField = (log: any, columns: any, timestampColumn: string) => {
   let field: any = {};
 
