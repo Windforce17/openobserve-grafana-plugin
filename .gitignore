@@ -29,6 +29,10 @@ e2e-results/
 **/cypress/videos
 **/cypress/report.json
 
+# Packaged plugin artifacts
+*.tar.gz
+*.zip
+
 # Editor
 .idea
 

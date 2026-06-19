@@ -22,6 +22,9 @@
     "grafanaDependency": ">=12.4.0",
     "plugins": []
   },
+  "backend": true,
+  "executable": "gpx_openobserve",
+  "alerting": true,
   "logs": true,
   "metrics": true,
   "tracing": true
